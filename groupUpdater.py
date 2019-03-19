@@ -6,43 +6,31 @@ import random
 import os.path
 import timeit
 import math
-
+import itertools
 from courseElements import *
 
-class groupAssign:
-    def __init__(self, student_csv, weighting_csv, per_group = 4, mode = 'Normal',
-                gen_pen = 15, gen_flag = True, eth_pen = 15, eth_flag = True,
-                name_q = 'Name', gen_q = "With what gender do you identify?",
-                eth_q = "What is your ethnicity?", n_iter = 15000):
-
-
-        self.student_csv = student_csv
-        self.weighting_csv = weighting_csv
-        self.check_delimiter = ";" # delimeter for checkbox questions
-        self.per_group = per_group
-        self.demoMode = False
-
-        self.n_iter = n_iter
-        self.epsilon = .35
-        self.conv_thresh = .05
-        self.discount = math.pow(.01/self.epsilon, 1/(self.n_iter))
-
-        self.question_weights = []
-        self.question_types = []
-
-        self.students = []
-        self.questions = []
-
-        self.mode = mode
-
+class groupUpdater:
+    def __init__(self, old_groups_csv = 'demo_group_setting.csv',
+                new_responses_csv = 'demo_update_new_response_ngroups.csv',
+                weighting_csv = 'demo_prof.csv', gen_pen = 100, gen_flag = True,
+                eth_pen = 15, eth_flag = False, name_q = 'Name',
+                gen_q = "With what gender do you identify?",
+                eth_q = "What is your ethnicity?", no_new = False, prefer_new = False,
+                n_iter = 10000):
+        self.class_state = None
+        self.per_group = 4
+        self.loose_students = []
+        self.check_delimiter = ';'
+        self.csv_delimiter = ','
+        self.demoMode = True
         if self.demoMode:
             self.blocks = ["block1;block2;block3"]
+            name_q = 'Please select your name'
+            gen_q = 'Gender'
         else:
             self.blocks = ["9L", "9S", "10", "11", "12", "2", "10A", "2A", "3A", "3B", "6A", "6B"]
 
         self.name_question = name_q
-
-        self.class_state = full_state()
 
         #defines the strings which indicate the respondent's gender/ethnicity. Can be left null.
         self.gen_question = gen_q
@@ -55,26 +43,77 @@ class groupAssign:
         self.gen_flag = gen_flag
         self.eth_flag = eth_flag
 
+
+        self.weighting_csv = weighting_csv
         self.process_prof()
-        self.process_students()
+        self.rebuild_original_state(old_groups_csv)
+        self.update_new_responses(new_responses_csv)
+        self.no_new = no_new
+        self.prefer_new = prefer_new
+        self.n_to_add = len(self.loose_students)
+        self.existing_space = self.get_space()
+        self.adding = self.existing_space >= self.n_to_add # we can just add to groups
 
-        self.assign_initial_groups()
+        # we can just add to existing groups (exceeding per_group a bit)
+        self.adding_plus = ((self.existing_space + (self.per_group - 1) >=
+                            self.n_to_add) or self.no_new) and not self.prefer_new
+
+        self.new_groups = not self.adding_plus
+        #self.new_groups = True
+        if prefer_new:
+            self.n_new = int((self.n_to_add - self.existing_space)/self.per_group)
+        else:
+            self.n_new = int((self.n_to_add - (self.existing_space +
+                        len(self.class_state.groups)))/self.per_group)
+        self.n_iter = n_iter
 
 
-#===============================================================================
-#=========================== DATA PROCESSING / SETUP ===========================
-#===============================================================================
+
     # Processes professor data CSV
     def process_prof(self):
         prof_data = self.read_csv_data(self.weighting_csv)
         self.question_weights = (prof_data[0]).copy()
         self.question_types = (prof_data[1]).copy()
 
-    # Processes student response CSV
-    def process_students(self):
-        response_data = self.read_csv_data(self.student_csv)
-        #use as list so that it's indexable (but no longer tied to dictionary's values)
-        self.questions = list(response_data[0].keys())
+    # Rebuild the original class state
+    def rebuild_original_state(self, old_groups_csv):
+
+        original_class = full_state()
+
+        with open(old_groups_csv, 'r') as old_group_file:
+            old_groups = old_group_file.readlines()
+
+        group_number = 0
+        original_class.groups = [Group() for i in range(len(old_groups))]
+        for row in old_groups:
+
+            #Generates a group and numbers it
+            current_group = original_class.groups[group_number]
+            current_group.students = []
+            current_group.number = group_number
+
+            stud_split = row.split(self.csv_delimiter)
+
+            for item in stud_split:
+                #Generates a student, sets the name, appends it to the group
+                new_student = Student()
+                new_student.name = item.replace("\n", "")
+                new_student.group = group_number
+                new_student.mutable = False
+                current_group.students.append(new_student)
+                current_group.size += 1
+
+            group_number += 1
+
+
+
+        self.class_state = original_class
+
+
+    def update_new_responses(self, new_responses_csv):
+        new_data = self.read_csv_data(new_responses_csv)
+
+        self.questions = list(new_data[0].keys())
 
         if self.name_question not in self.questions:
             raise ValueError("Provided name question {} not \
@@ -88,14 +127,62 @@ class groupAssign:
 
 
         #Creates an empty student object for each student
-        self.students = [Student() for i in range(len(response_data))]
+        self.students = [Student() for i in range(len(new_data))]
         counter = 0
 
         #Populates list of students
         for student in self.students:
-            student.name = (response_data[counter])[self.name_question]
-            student.answers = response_data[counter]
+            student.name = (new_data[counter])[self.name_question]
+            student.name = student.name.replace("\n", "")
+            student.answers = new_data[counter]
             counter += 1
+
+        loose_students = []
+
+
+
+        # Stores students in self.students who have a match in the
+        # original class
+        matched = set()
+
+
+        # Remove students who have dropped
+
+        group_to_remove = set()
+        for group in self.class_state.groups:
+            to_remove = set()
+            for student_old in group.students:
+                found = False
+                for student_new in self.students:
+                    if student_old.name == student_new.name:
+                        found = True
+                        student_old.answers = student_new.answers # transfer response data
+                        matched.add(student_new)
+                        break
+
+                if not found:
+                    to_remove.add(student_old)
+            for removal in to_remove:
+                group.students.remove(removal)
+
+            if len(group.students) <= 1:
+                for student in group.students:
+                    print(student.name)
+                if len(group.students) == 1: # Lone student - should be regrouped
+                    loose_students.append(group.students[0])
+
+                group_to_remove.add(group) # Remove group regardless of whether 1 or 0 students
+
+        for group in group_to_remove:
+            self.class_state.groups.remove(group)
+
+        for m_student in matched:
+            self.students.remove(m_student)
+
+        for unmatched_student in self.students:
+            loose_students.append(unmatched_student)
+
+        self.loose_students = loose_students
 
     #read_csv_data function was originally written by Mark Franklin (Thayer IT), 9/29/17
     # input: file name
@@ -122,68 +209,97 @@ class groupAssign:
         return(csv_data)
 
 
-#===============================================================================
-#========================== Assignment Initialization ==========================
-#===============================================================================
+    def add(self):
+        loose_students = self.loose_students.copy()
+        # Do an exhaustive search of combos because for combinations this is
+        # tractable even for high n_to_add so why not
+        if self.new_groups:
+            for i in range(self.n_new):
+                max_score = float("-inf")
+                max_group = None
 
-    # Assigns each student to a random group to begin
-    def assign_initial_groups(self):
+                potentials = itertools.combinations(loose_students, self.per_group)
+                for potential in potentials:
+                    g = Group()
+                    g.number = len(self.class_state.groups)
+                    g.students = list(potential)
+                    g.size = len(potential)
+                    g.score = self.score_group(g)
+                    if g.score > max_score:
+                        max_score = g.score
+                        max_group = g
+
+                for s in max_group.students:
+                    loose_students.remove(s)
+                self.class_state.groups.append(max_group)
+
+        with_space = self.get_groups_with_space()
+
+        max_assign = None
+        max_gain = float("-inf")
+
+        if with_space:
+
+            for i in range(self.n_iter):
+                #if i % 500 == 0:
+                print("Gain max: " +  str(max_gain))
+                repl = set()
+                assignment = []
+                for stud in loose_students:
+                    random.shuffle(with_space)
+                    g = with_space.pop()
+                    g.students.append(stud)
+                    assignment.append((g, stud))
+                    repl.add(g)
+                osum = 0
+                for g in repl:
+                    osum += g.score
+
+                nsum = 0
+                for g in repl:
+                    nsum += self.score_group(g)
+
+                # Track gain to avoid having to rescore the entire class state
+                # Even if different groups are used,
+                gain = nsum - osum
+
+                if gain > max_gain:
+                    max_gain= gain
+                    max_assign = assignment
+
+                self.reverse_assign(assignment,  with_space)
+
+            for item in max_assign:
+                item[0].students.append(item[1])
+                item[0].size += 1
+                item[0].score = self.score_group(item[0])
+                item[1].group = item[0].number
+        self.score_class_state()
+
+    def reverse_assign(self, assignment, with_space):
+        for item in assignment:
+            item[0].students.remove(item[1])
+            with_space.append(item[0])
+
+
+    # Calculates available space in existing groups
+    def get_space(self):
+        space = 0
+        for group in self.class_state.groups:
+            space += max((self.per_group - group.size), 0)
+        return space
+
+    # Returns a list of groups with available sapce
+    def get_groups_with_space(self, plus_one = False):
+        spaces = []
         per_group = self.per_group
-        num_students = len(self.students)
-        num_groups = int(num_students/self.per_group) # number of full groups we can make
-        remainder = num_students%self.per_group
-
-        self.class_state.groups = [Group() for i in range(num_groups)]
-
-        i = 0
-
-        # Gets a randomly shuffled copy of the student list for random group assignment
-        rand_students = random.sample(self.students, len(self.students))
-        n = 0
-        for group in self.class_state.groups:
-
-            group.number = int(i/self.per_group)
-            group.size = per_group
-            group.students = rand_students[i:(i+self.per_group)]
-            i += self.per_group
-            n+=1
-
-
-        # if remainder is within one person of the desired group size,
-        # makes the remainders into a group otherwise, adds remainder to other
-        # groups
-        if remainder:
-            if remainder + 1 == per_group and remainder != 1 and per_group>=3:
-                new_group = Group()
-                new_group.size = remainder
-                new_group.students = rand_students[i:]
-                new_group.number = num_groups
-                self.class_state.groups.append(new_group)
-
-
-            #distributes remainder across other groups
-            else:
-                j = 0
-                while remainder:
-                    self.class_state.groups[j].students.append(rand_students[i])
-                    self.class_state.groups[j].size += 1
-                    i+=1
-                    j+=1
-                    remainder -= 1
+        if plus_one: # allows overflow of one extra student per group
+            per_group += 1
 
         for group in self.class_state.groups:
-            group.score = self.score_group(group)
-
-
-        #testing purposes - verifies groups and sizes
-        if __debug__:
-            print(str(len(self.class_state.groups)) + " groups in class")
-            for group in self.class_state.groups:
-                print("Group " + str(group.number) + " contains " + str(group.size) + " students and a score of " + str(group.score) +".")
-            self.output_state('p')
-        #end testing
-
-        print("Initial class score = " + str(self.score_class_state()))
+            for i in range(per_group - len(group.students)):
+                spaces.append(group)
+        return spaces
 
 
 #===============================================================================
@@ -333,7 +449,7 @@ class groupAssign:
             options_over_count = 1
         # negative because if homogenous (negative weight) we need it to end up positive to add to score
         # and if heterogenous (positive weight) we want it negative to reduce score as homogeneity increases
-        return -options_over_count
+        return -options_over_count * int(self.question_weights[question])
 
     # implements penalties for one non-male student alone in a group
     def get_gender_penalty(self, group):
@@ -413,131 +529,24 @@ class groupAssign:
             self.output_state('u')
 
 
-#===============================================================================
-#=============================== Group Assignment ==============================
-#===============================================================================
 
-    # Swaps two random groups
-    # Accepts a number of iterations to perform
-    # returns 1 and new state if score improves, 0 and old state else.
-    def iterate_normal(self, iterations=0):
-
-        if(iterations == 0):
-            iterations = self.n_iter
-
-        failure = 0
-        prev_score = 0
-        conv_1 = False
-        for i in range(iterations):
-            if i%500 == 0:
-                print("At iteration " + str(i))
-                scoresum = 0
-                for group in self.class_state.groups:
-                    scoresum += group.score
-                print(str(scoresum/len(self.class_state.groups)))
-
-                if prev_score != 0 and \
-                        (scoresum - prev_score)/prev_score < self.conv_thresh:
-                    if conv_1: # Ensures that convergence is stable for at least two 500 rounds
-                        print("Score converged.")
-                        break
-                    else:
-                        conv_1 = True
-                elif conv_1: # if it escaped convergence, reset flag
-                    conv_1 = False
-                # This means that for the next run (last chance to improve)
-                # we give it a chance and compare 1000 iterations back for improvement
-                # instead of the typical 500
-                if not conv_1:
-                    prev_score = scoresum
-
-            self.swap_students_limited(self.class_state.groups)
+if  __name__ == '__main__':
+    updater = groupUpdater()
+    updater.add()
+    updater.output_state('p')
 
 
-        # Scores and prints the final class state
-        end_score = self.score_class_state()
-        print("Final class score is: " + str(end_score))
 
-    def random_swap(self):
-        n_groups = len(self.class_state.groups)
+# Want: List of mutable groups (groups with space)
+# List of mutable students
 
-    def get_rand_index(self, max_num):
-        rand_index_one = randint(0, max_num)
-        rand_index_two = rand_index_one
-        while rand_index_two == rand_index_one:
-            rand_index_two = randint(0, max_num)
+# In the case of adding or adding plus:
+# Assign everyone to a group
+# select random from list of added students
+# iterate over them if in random groups? idk that
 
-        return (rand_index_one, rand_index_two)
 
-    # swaps students between limited groups. Takes class state and list of groups which are ok to swap.
-    def swap_students_limited(self, swappable_groups):
-        swap_size = len(swappable_groups)
-        (rand_group_one, rand_group_two) = self.get_rand_index(swap_size - 1)
-        g1 = swappable_groups[rand_group_one]
-        g2 = swappable_groups[rand_group_two]
-        self.epsilon *= self.discount
-
-        if random.random() > self.epsilon: # Greedy search
-
-            group_one = copy.deepcopy(swappable_groups[rand_group_one])
-            group_two = copy.deepcopy(swappable_groups[rand_group_two])
-
-            total_score = group_one.score + group_two.score
-
-            best_from_one = None
-            best_from_two = None
-            best_g1 = group_one.score
-            best_g2 = group_two.score
-            best_score = total_score
-
-            # For each student pairing, swap, test, and swap back
-            for i in group_one.students:
-                for j in group_two.students:
-                    self.swap(group_one, i, group_two, j)
-                    g1_score = self.score_group(group_one)
-                    g2_score = self.score_group(group_two)
-                    candidate_score = (g1_score + g2_score)
-                    self.swap(group_one, j, group_two, i)
-
-                    if candidate_score > best_score: # Improvement
-                        best_from_one = i
-                        best_from_two = j
-                        best_g1 = g1_score
-                        best_g2 = g2_score
-                        best_score = candidate_score
-
-            if best_from_one is not None: # Do the permanent swap, this is the best
-                self.swap(group_one, best_from_one, group_two, best_from_two)
-                group_one.score = best_g1
-                group_two.score = best_g2
-
-                self.class_state.groups.remove(g1)
-                self.class_state.groups.remove(g2)
-                self.class_state.groups.append(group_one)
-                self.class_state.groups.append(group_two)
-
-                return 1
-
-            else:
-                return 0
-
-        else: # Random swap
-            s1 = random.choice(swappable_groups[rand_group_one].students)
-            s2 = random.choice(swappable_groups[rand_group_two].students)
-            self.swap(swappable_groups[rand_group_one], s1,
-                        swappable_groups[rand_group_two], s2)
-            swappable_groups[rand_group_one].score = self.score_group(swappable_groups[rand_group_one])
-            swappable_groups[rand_group_two].score = self.score_group(swappable_groups[rand_group_two])
-
-            return 1
-
-    # Swaps student i from group one with student j from group two
-    def swap(self, group_one, i, group_two, j):
-        i.group = group_two.number
-        j.group = group_one.number
-
-        group_one.students.append(j)
-        group_two.students.append(i)
-
-        group_one.students.remove(i)
-        group_two.students.remove(j)
+#for new_groups:
+#    make best group possible (by  taking every subset of per_group from n students)
+#   and testing
+#   possible bc combinations are tractable in number we need (~20 max)
