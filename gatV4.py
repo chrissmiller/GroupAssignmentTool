@@ -18,13 +18,13 @@ class groupAssign:
 
         self.student_csv = student_csv
         self.weighting_csv = weighting_csv
-        self.check_delimiter = ";" # delimeter for checkbox questions
+        self.check_delimiter = ";" # delimiter for checkbox questions
         self.per_group = per_group
         self.demoMode = False
 
         self.n_iter = n_iter
-        self.epsilon = .35
-        self.conv_thresh = .05
+        self.epsilon = .3
+        self.conv_thresh = .01
         self.discount = math.pow(.01/self.epsilon, 1/(self.n_iter))
 
         self.question_weights = []
@@ -54,7 +54,8 @@ class groupAssign:
         #indicates whether or not gender/ethnicity is being tested for
         self.gen_flag = gen_flag
         self.eth_flag = eth_flag
-
+        self.male_opt = "Male"
+        self.caucasian_opt = "White or Caucasian"
         self.process_prof()
         self.process_students()
 
@@ -333,18 +334,20 @@ class groupAssign:
             options_over_count = 1
         # negative because if homogenous (negative weight) we need it to end up positive to add to score
         # and if heterogenous (positive weight) we want it negative to reduce score as homogeneity increases
-        return -options_over_count
+        return -options_over_count * int(self.question_weights[question])
 
     # implements penalties for one non-male student alone in a group
     def get_gender_penalty(self, group):
         gender_counter = 0
 
         for student in group.students:
-            if student.answers[self.gen_question] != "Male":
+            if student.answers[self.gen_question] != self.male_opt:
                 gender_counter += 1
 
         if gender_counter == 1:
             return self.gender_penalty
+        elif self.per_group > 4 and gender_counter == 2:
+            return self.gender_penalty/3
         else:
             return 0
 
@@ -353,12 +356,14 @@ class groupAssign:
         eth_counter = 0
 
         for student in group.students:
-            if student.answers[self.eth_question] != "White":
+            if student.answers[self.eth_question] != self.caucasian_opt:
                 eth_counter += 1
 
 
         if eth_counter == 1:
-            return self.eth_penalty
+            return self.ethnicity_penalty
+        elif self.per_group > 4 and eth_counter == 2:
+            return self.ethnicity_penalty/3
         else:
             return 0
 
@@ -390,15 +395,20 @@ class groupAssign:
                 if not(overwrite == 'y' or overwrite == 'Y'):
                     while os.path.isfile(output_filename):
                         output_filename = input("Please enter a filename for the output: ")
-            output_file = open(output_filename, 'w')
+            with open(output_filename, 'w') as output_file:
+                for group in self.class_state.groups:
+                    for student in group.students:
+                        output_file.write(student.name + ", " + str(group.number))
+                        for question in self.questions:
+                            output_file.write(", " + student.answers[question])
+                        output_file.write("\n")
 
             #Writes each group on a line in the new file
-            for group in self.class_state.groups:
-                output_file.write(group.students[0].name)
-                for student in group.students[1:]:
-                    output_file.write(", " + student.name)
-                output_file.write("\n")
-            output_file.close()
+            #for group in self.class_state.groups:
+            #    output_file.write(group.students[0].name)
+            #    for student in group.students[1:]:
+            #        output_file.write(", " + student.name)
+            #    output_file.write("\n")
 
         if output_type == 'p' or output_type == 'b':
             for group in self.class_state.groups:
