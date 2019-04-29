@@ -35,7 +35,7 @@ class groupAssign:
         # How many combinations to run in assign_strong_groups()
         # On a laptop, typically can evaluate ~22,000 combos per second
         # Warning - for large datasets, will still require long process time
-        self.combinationlimit = 10000
+        self.combinationlimit = 25000
 
         self.question_weights = []
         self.question_types = []
@@ -216,9 +216,18 @@ class groupAssign:
             max_score = float('-inf')
             if len(students) < per_group:
                 per_group = len(students)
-            potentials = list(itertools.combinations(students, per_group))
-            if len(potentials) > self.combinationlimit:
-                potentials = random.sample(potentials, self.combinationlimit)
+
+            # To avoid listifying - should we maybe just shuffle students and pull first (combinationlimit) from iterator?
+            students = random.sample(students, len(students))
+            potentials = itertools.combinations(students, per_group)
+
+            # If there are too many combos, randomly sample
+            if (math.factorial(len(students))/(math.factorial(per_group)*
+                math.factorial(len(students) - per_group)) > self.combinationlimit):
+                #potentials = random.sample(list(potentials), self.combinationlimit)
+                potentials = itertools.islice(potentials, self.combinationlimit)
+
+
             for potential in potentials:
                 hash = []
                 for student in potential:
@@ -661,7 +670,7 @@ class groupAssign:
         group_two.students.remove(j)
 
 if __name__ == '__main__':
-    student_csv = 'c6_s_test.csv'
+    student_csv = 'c6_s_tiny.csv'
     weighting_csv = 'c6prof.csv'
     assigner = groupAssign(student_csv, weighting_csv, per_group = 4, mode = 'Normal',
             gen_pen = 50, gen_flag = True, eth_pen = 50, eth_flag = True,
