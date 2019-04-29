@@ -11,7 +11,7 @@ from courseElements import *
 
 class groupAssign:
     def __init__(self, student_csv, weighting_csv, per_group = 4, mode = 'Normal',
-                gen_pen = 15, gen_flag = True, eth_pen = 15, eth_flag = True,
+                gen_pen = 50, gen_flag = True, eth_pen = 50, eth_flag = True,
                 name_q = 'Name', gen_q = "With what gender do you identify?",
                 eth_q = "What is your ethnicity?", n_iter = 15000):
 
@@ -28,7 +28,14 @@ class groupAssign:
         self.conv_thresh = .01
         #self.discount = math.pow(.01/self.epsilon, 1/(self.n_iter))
         self.discount=0
+
+        # How long to run anytime_run() for until exiting
         self.timelimit = 30
+
+        # How many combinations to run in assign_strong_groups()
+        # On a laptop, typically can evaluate ~22,000 combos per second
+        # Warning - for large datasets, will still require long process time
+        self.combinationlimit = 10000
 
         self.question_weights = []
         self.question_types = []
@@ -209,7 +216,9 @@ class groupAssign:
             max_score = float('-inf')
             if len(students) < per_group:
                 per_group = len(students)
-            potentials = itertools.combinations(students, per_group)
+            potentials = list(itertools.combinations(students, per_group))
+            if len(potentials) > self.combinationlimit:
+                potentials = random.sample(potentials, self.combinationlimit)
             for potential in potentials:
                 hash = []
                 for student in potential:
@@ -246,24 +255,6 @@ class groupAssign:
 
         print("(Computed in " + str(e - s) + " seconds)")
 
-        print("\nVerification run: \n")
-        sum = 0
-        for group in self.class_state.groups:
-            sc = self.score_group(group)
-            print("Group " + str(group.number))
-            print("\tScore " + str(sc) + "\n")
-            sum += sc
-        print("Average score: " + str(sum/len(self.class_state.groups)))
-
-        print("\nValidating students\n")
-        std = set()
-        for group in self.class_state.groups:
-            for student in group.students:
-                if student.name in std:
-                    print("Error! Student " + student.name)
-                    print("Current set: " + str(std))
-                else:
-                    std.add(student.name)
 
 
 
@@ -516,14 +507,26 @@ class groupAssign:
         stime = time.time()
         mscore = float('-inf')
         mstate = None
-        while ((time.time() - stime) < timelimit):
+        sumtime = 0
+        avgtime = 0
+        nruns = 0
+        ctime = time.time()
+        while ((ctime - stime) < timelimit - avgtime):
             self.epsilon = self.initial_ep # reset epsilon
+            self.assign_initial_groups()
             cscore = self.iterate_normal(iterations=iterations, visible = True)
 
             if cscore > mscore:
                 mstate = copy.deepcopy(self.class_state)
                 mscore = cscore
+
+            ctime = time.time()
+            nruns += 1
+            sumtime = ctime - stime
+            avgtime = sumtime / nruns
+
         print("Max score: " + str(mscore))
+        print("Average time: " + str(avgtime))
         self.class_state = mstate
         self.output_state('b')
 
@@ -658,11 +661,12 @@ class groupAssign:
         group_two.students.remove(j)
 
 if __name__ == '__main__':
-    student_csv = 'c6_s_small.csv'
+    student_csv = 'c6_s_test.csv'
     weighting_csv = 'c6prof.csv'
     assigner = groupAssign(student_csv, weighting_csv, per_group = 4, mode = 'Normal',
             gen_pen = 50, gen_flag = True, eth_pen = 50, eth_flag = True,
             name_q = 'What is your NETID?', gen_q = "What gender do you identify with?",
-            eth_q = "What is your ethnicity?", n_iter = 5000)
+            eth_q = "What is your ethnicity?", n_iter = 7500)
     assigner.assign_strong_groups()
-    assigner.iterate_normal(visible = True)
+    assigner.iterate_normal(visible=True)
+    assigner.output_state('b')
