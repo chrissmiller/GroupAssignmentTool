@@ -35,7 +35,7 @@ class groupAssign:
         # How many combinations to run in assign_strong_groups()
         # On a laptop, typically can evaluate ~22,000 combos per second
         # Warning - for large datasets, will still require long process time
-        self.combinationlimit = 3000
+        self.combinationlimit = 15000
 
         self.question_weights = []
         self.question_types = []
@@ -76,7 +76,7 @@ class groupAssign:
         self.process_students()
         self.process_prof()
 
-        if len(self.students) > 25:
+        if len(self.students) > 20:
             self.default_init_mode = "Strong" # "Random" or "Strong"
         else:
             self.default_init_mode = "Random" # "Random" or "Strong"
@@ -223,8 +223,6 @@ class groupAssign:
         num_groups = int(num_students/self.per_group) # number of full groups we can make
         remainder = num_students%self.per_group
         students = copy.copy(self.students)
-        if remainder:
-            num_groups += 1
 
         self.class_state.groups = [Group() for i in range(num_groups)]
 
@@ -265,7 +263,11 @@ class groupAssign:
 
             for student in max_group: # Clear assigned students
                 students.remove(student)
+
+        self.strong_remainder(students)
+
         e = time.time()
+
         sum = 0
         for group in self.class_state.groups:
             #print("Group " + str(group.number))
@@ -278,6 +280,27 @@ class groupAssign:
         self.initialized = True
 
         return sum/len(self.class_state.groups)
+
+    # Adds remainder students to groups
+    def strong_remainder(self, students):
+        for student in students:
+            max_improve = float('-inf')
+            max_improve_group = None
+            for group in self.class_state.groups:
+                # don't want to go more than one over
+                if len(group.students) <= self.per_group:
+                    init_score = group.score
+                    group.students.append(student)
+                    fin_score = self.score_group(group)
+                    score_delta = (fin_score - init_score)
+
+                    if score_delta > max_improve:
+                        max_improve = score_delta
+                        max_improve_group = group
+
+                    group.students.remove(student)
+            max_improve_group.students.append(student)
+            max_improve_group.score = max_improve_group.score + max_improve
 
     def get_potentials(self, students, per_group):
         students = random.sample(students, len(students))
@@ -724,14 +747,14 @@ class groupAssign:
                 min_score = group.score
         return min_score
 
-        
+
 def main():
     random.seed(2)
-    student_csv = 's_restrict.csv'
-    weighting_csv = 'p_restrict.csv'
+    student_csv = 'data/c6_s_25.csv'
+    weighting_csv = 'data/c6prof.csv'
     assigner = groupAssign(student_csv, weighting_csv, per_group = 4, mode = 'Normal',
             gen_pen = 0, gen_flag = True, eth_pen = 50, eth_flag = False,
-            name_q = 'Please select your name', gen_q = "Gender",
+            name_q = 'What is your NETID?', gen_q = "What gender do you identify with?",
             eth_q = "What is your ethnicity?", n_iter = 7500)
 
     assigner.assign_strong_groups()
