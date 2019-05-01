@@ -23,10 +23,10 @@ class groupAssign:
         self.demoMode = False
 
         self.n_iter = n_iter
-        self.initial_ep = 0
+        self.initial_ep = 0.25
         self.epsilon = self.initial_ep
         self.conv_thresh = .01
-        #self.discount = math.pow(.01/self.epsilon, 1/(self.n_iter))
+        self.discount = math.pow(.01/self.epsilon, 1/(self.n_iter))
         self.discount=0
 
         # How long to run anytime_run() for until exiting
@@ -35,7 +35,7 @@ class groupAssign:
         # How many combinations to run in assign_strong_groups()
         # On a laptop, typically can evaluate ~22,000 combos per second
         # Warning - for large datasets, will still require long process time
-        self.combinationlimit = 25000
+        self.combinationlimit = 3000
 
         self.question_weights = []
         self.question_types = []
@@ -69,7 +69,9 @@ class groupAssign:
         self.process_prof()
         self.process_students()
 
-        self.assign_initial_groups()
+        self.default_init_mode = "Random" # "Random" or "Strong"
+        self.initialized = False
+        #self.assign_initial_groups()
 
 
 #===============================================================================
@@ -185,16 +187,8 @@ class groupAssign:
         for group in self.class_state.groups:
             group.score = self.score_group(group)
 
-
-        #testing purposes - verifies groups and sizes
-        if __debug__:
-            print(str(len(self.class_state.groups)) + " groups in class")
-            for group in self.class_state.groups:
-                print("Group " + str(group.number) + " contains " + str(group.size) + " students and a score of " + str(group.score) +".")
-            self.output_state('p')
-        #end testing
-
         print("Initial class score = " + str(self.score_class_state()))
+        self.initialized = True
 
     # Assigns each group in an optimal fashion
     # Ie, selects most optimal combo, then most optimal of remaining students, etc.
@@ -218,15 +212,7 @@ class groupAssign:
                 per_group = len(students)
 
             # To avoid listifying - should we maybe just shuffle students and pull first (combinationlimit) from iterator?
-            students = random.sample(students, len(students))
-            potentials = itertools.combinations(students, per_group)
-
-            # If there are too many combos, randomly sample
-            if (math.factorial(len(students))/(math.factorial(per_group)*
-                math.factorial(len(students) - per_group)) > self.combinationlimit):
-                #potentials = random.sample(list(potentials), self.combinationlimit)
-                potentials = itertools.islice(potentials, self.combinationlimit)
-
+            potentials = self.get_potentials(students, per_group)
 
             for potential in potentials:
                 hash = []
@@ -264,7 +250,19 @@ class groupAssign:
 
         print("(Computed in " + str(e - s) + " seconds)")
 
+        self.initialized = True
 
+    def get_potentials(self, students, per_group):
+        students = random.sample(students, len(students))
+        potentials = itertools.combinations(students, per_group)
+
+        # If there are too many combos, randomly sample
+        if (math.factorial(len(students))/(math.factorial(per_group)*
+            math.factorial(len(students) - per_group)) > self.combinationlimit):
+            #potentials = random.sample(list(potentials), self.combinationlimit)
+            potentials = itertools.islice(potentials, self.combinationlimit)
+
+        return potentials
 
 
 #===============================================================================
@@ -543,7 +541,11 @@ class groupAssign:
     # Accepts a number of iterations to perform
     # returns 1 and new state if score improves, 0 and old state else.
     def iterate_normal(self, iterations=0, visible=False):
-
+        if not self.initialized:
+            if self.default_init_mode == "Strong":
+                self.assign_strong_groups()
+            else:
+                self.assign_initial_groups()
         if(iterations == 0):
             iterations = self.n_iter
 
@@ -588,13 +590,10 @@ class groupAssign:
     def random_swap(self):
         n_groups = len(self.class_state.groups)
 
+    # Selects two random indices in the range 0 to max_num, inclusive
     def get_rand_index(self, max_num):
-        rand_index_one = randint(0, max_num)
-        rand_index_two = rand_index_one
-        while rand_index_two == rand_index_one:
-            rand_index_two = randint(0, max_num)
-
-        return (rand_index_one, rand_index_two)
+        rand_indices = random.sample(list(range(max_num+1)), 2)
+        return (rand_indices[0], rand_indices[1])
 
     # swaps students between limited groups. Takes class state and list of groups which are ok to swap.
     def swap_students_limited(self, swappable_groups):
@@ -669,13 +668,19 @@ class groupAssign:
         group_one.students.remove(i)
         group_two.students.remove(j)
 
-if __name__ == '__main__':
-    student_csv = 'c6_s_tiny.csv'
+def main():
+    random.seed(1)
+    student_csv = 'c6_s_50.csv'
     weighting_csv = 'c6prof.csv'
     assigner = groupAssign(student_csv, weighting_csv, per_group = 4, mode = 'Normal',
             gen_pen = 50, gen_flag = True, eth_pen = 50, eth_flag = True,
             name_q = 'What is your NETID?', gen_q = "What gender do you identify with?",
-            eth_q = "What is your ethnicity?", n_iter = 7500)
+            eth_q = "What is your ethnicity?", n_iter = 5000)
     assigner.assign_strong_groups()
-    assigner.iterate_normal(visible=True)
-    assigner.output_state('b')
+    #assigner.iterate_normal(visible=True)
+    #assigner.anytime_run()
+    #assigner.output_state('p')
+
+
+if __name__ == '__main__':
+    main()
