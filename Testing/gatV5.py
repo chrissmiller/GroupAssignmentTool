@@ -25,9 +25,9 @@ class groupAssign:
         self.n_iter = n_iter
         self.initial_ep = 0.25
         self.epsilon = self.initial_ep
-        self.conv_thresh = .01
+        self.conv_thresh = .005
         self.discount = math.pow(.01/self.epsilon, 1/(self.n_iter))
-        self.discount=0
+        #self.discount=0
 
         # How long to run anytime_run() for until exiting
         self.timelimit = 30
@@ -57,6 +57,12 @@ class groupAssign:
         #defines the strings which indicate the respondent's gender/ethnicity. Can be left null.
         self.gen_question = gen_q
         self.eth_question = eth_q
+
+        # Stores associated questions for restrictive question types
+        # (ie, for "Which student(s) do you not wish to work for" this would link
+        # that question to the "Names" question)
+        self.restrictive_questions = {}
+
         #penalties for groups with either only one girl or one minority student
         self.gender_penalty = gen_pen
         self.ethnicity_penalty = eth_pen
@@ -66,10 +72,15 @@ class groupAssign:
         self.eth_flag = eth_flag
         self.male_opt = "Male"
         self.caucasian_opt = "White or Caucasian"
-        self.process_prof()
-        self.process_students()
 
-        self.default_init_mode = "Random" # "Random" or "Strong"
+        self.process_students()
+        self.process_prof()
+
+        if len(self.students) > 25:
+            self.default_init_mode = "Strong" # "Random" or "Strong"
+        else:
+            self.default_init_mode = "Random" # "Random" or "Strong"
+
         self.initialized = False
         #self.assign_initial_groups()
 
@@ -82,6 +93,17 @@ class groupAssign:
         prof_data = self.read_csv_data(self.weighting_csv)
         self.question_weights = (prof_data[0]).copy()
         self.question_types = (prof_data[1]).copy()
+        for question in self.questions:
+            if self.question_types[question][0] == "R":
+                csplit = self.question_types[question].split(self.check_delimiter)
+                if len(csplit) == 0:
+                    self.restrictive_questions[question] = ""
+                    print("Unable to find associated question for restrictive question "
+                        + question)
+                    self.question_types[question] = "R"
+                else:
+                    self.restrictive_questions[question] = csplit[1]
+                    self.question_types[question] = "R"
 
     # Processes student response CSV
     def process_students(self):
@@ -193,6 +215,9 @@ class groupAssign:
     # Assigns each group in an optimal fashion
     # Ie, selects most optimal combo, then most optimal of remaining students, etc.
     def assign_strong_groups(self):
+        self.epsilon = 0
+        self.initial_ep = 0
+
         per_group = self.per_group
         num_students = len(self.students)
         num_groups = int(num_students/self.per_group) # number of full groups we can make
@@ -243,14 +268,16 @@ class groupAssign:
         e = time.time()
         sum = 0
         for group in self.class_state.groups:
-            print("Group " + str(group.number))
-            print("\tScore " + str(group.score) + "\n")
+            #print("Group " + str(group.number))
+            #print("\tScore " + str(group.score) + "\n")
             sum += group.score
         print("Average score: " + str(sum/len(self.class_state.groups)))
 
-        print("(Computed in " + str(e - s) + " seconds)")
+        #print("(Computed in " + str(e - s) + " seconds)")
 
         self.initialized = True
+
+        return sum/len(self.class_state.groups)
 
     def get_potentials(self, students, per_group):
         students = random.sample(students, len(students))
@@ -283,18 +310,23 @@ class groupAssign:
 
 
         for question in self.questions:
-
+            # Scoring multiple choice question type
             if self.question_types[question] == "M":
                 scores[question] = self.score_m(group, question)
 
-            #Scheduling question scoring mode
+            # Scheduling question scoring mode
             elif self.question_types[question] == "Sc":
                     scores[question] = self.score_scheduling(group, question)
 
-                #Scoring for checkbox style questions
+            # Scoring for checkbox style questions
             elif self.question_types[question] == "C":
                     scores[question] = self.score_c(group, question)
 
+            # Scoring for restrictive style questions
+            elif self.question_types[question] == "R":
+                scores[question] = self.get_restrictive_penalty(group, question)
+
+            # String response questions - no scoring necessary
             elif self.question_types[question] == "S":
                 scores[question] = 0
 
@@ -413,6 +445,22 @@ class groupAssign:
         # negative because if homogenous (negative weight) we need it to end up positive to add to score
         # and if heterogenous (positive weight) we want it negative to reduce score as homogeneity increases
         return -options_over_count * int(self.question_weights[question])
+
+    # Implements penalties for restrictive question types
+    def get_restrictive_penalty(self, group, question):
+        student_choices = set()
+        penalty = 0
+        for student in group.students:
+            for choice in student.answers[question].split(self.check_delimiter):
+                student_choices.add(choice)
+
+        associated_question = self.restrictive_questions[question]
+        for student in group.students:
+            for item in student.answers[associated_question].split(self.check_delimiter):
+                if item in student_choices:
+                    penalty -= int(self.question_weights[question])
+
+        return penalty
 
     # implements penalties for one non-male student alone in a group
     def get_gender_penalty(self, group):
@@ -668,18 +716,28 @@ class groupAssign:
         group_one.students.remove(i)
         group_two.students.remove(j)
 
+    # Returns minimum score across all groups
+    def get_min_groupscore(self):
+        min_score = float('inf')
+        for group in self.class_state.groups:
+            if group.score < min_score:
+                min_score = group.score
+        return min_score
+
+        
 def main():
-    random.seed(1)
-    student_csv = 'c6_s_50.csv'
-    weighting_csv = 'c6prof.csv'
+    random.seed(2)
+    student_csv = 's_restrict.csv'
+    weighting_csv = 'p_restrict.csv'
     assigner = groupAssign(student_csv, weighting_csv, per_group = 4, mode = 'Normal',
-            gen_pen = 50, gen_flag = True, eth_pen = 50, eth_flag = True,
-            name_q = 'What is your NETID?', gen_q = "What gender do you identify with?",
-            eth_q = "What is your ethnicity?", n_iter = 5000)
+            gen_pen = 0, gen_flag = True, eth_pen = 50, eth_flag = False,
+            name_q = 'Please select your name', gen_q = "Gender",
+            eth_q = "What is your ethnicity?", n_iter = 7500)
+
     assigner.assign_strong_groups()
-    #assigner.iterate_normal(visible=True)
+    assigner.iterate_normal(visible=True)
     #assigner.anytime_run()
-    #assigner.output_state('p')
+    assigner.output_state('p')
 
 
 if __name__ == '__main__':
