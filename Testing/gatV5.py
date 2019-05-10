@@ -11,9 +11,7 @@ from courseElements import *
 
 class groupAssign:
     def __init__(self, student_csv, weighting_csv, per_group = 4, mode = 'Normal',
-                gen_pen = 50, gen_flag = True, eth_pen = 50, eth_flag = True,
-                name_q = 'Name', gen_q = "With what gender do you identify?",
-                eth_q = "What is your ethnicity?", n_iter = 15000):
+                name_q = 'Name', n_iter = 15000):
 
 
         self.student_csv = student_csv
@@ -27,7 +25,6 @@ class groupAssign:
         self.epsilon = self.initial_ep
         self.conv_thresh = .005
         self.discount = math.pow(.01/self.epsilon, 1/(self.n_iter))
-        #self.discount=0
 
         # How long to run anytime_run() for until exiting
         self.timelimit = 30
@@ -35,7 +32,7 @@ class groupAssign:
         # How many combinations to run in assign_strong_groups()
         # On a laptop, typically can evaluate ~22,000 combos per second
         # Warning - for large datasets, will still require long process time
-        self.combinationlimit = 15000
+        self.combinationlimit = 10000
 
         self.question_weights = []
         self.question_types = []
@@ -54,24 +51,12 @@ class groupAssign:
 
         self.class_state = full_state()
 
-        #defines the strings which indicate the respondent's gender/ethnicity. Can be left null.
-        self.gen_question = gen_q
-        self.eth_question = eth_q
-
         # Stores associated questions for restrictive question types
         # (ie, for "Which student(s) do you not wish to work for" this would link
         # that question to the "Names" question)
         self.restrictive_questions = {}
 
-        #penalties for groups with either only one girl or one minority student
-        self.gender_penalty = gen_pen
-        self.ethnicity_penalty = eth_pen
-
-        #indicates whether or not gender/ethnicity is being tested for
-        self.gen_flag = gen_flag
-        self.eth_flag = eth_flag
-        self.male_opt = "Male"
-        self.caucasian_opt = "White or Caucasian"
+        self.majority_opt = {}
 
         self.process_students()
         self.process_prof()
@@ -82,7 +67,6 @@ class groupAssign:
             self.default_init_mode = "Random" # "Random" or "Strong"
 
         self.initialized = False
-        #self.assign_initial_groups()
 
 
 #===============================================================================
@@ -94,16 +78,25 @@ class groupAssign:
         self.question_weights = (prof_data[0]).copy()
         self.question_types = (prof_data[1]).copy()
         for question in self.questions:
-            if self.question_types[question][0] == "R":
+            if self.question_types[question][0] == "R" or self.question_types[question][0] == "I":
                 csplit = self.question_types[question].split(self.check_delimiter)
-                if len(csplit) == 0:
-                    self.restrictive_questions[question] = ""
-                    print("Unable to find associated question for restrictive question "
-                        + question)
-                    self.question_types[question] = "R"
+
+                self.question_types[question] = self.question_types[question][0]
+
+                if len(csplit) == 1:
+                    if self.question_types[question] == "R":
+                        self.restrictive_questions[question] = ""
+                        print("Unable to find associated question for restrictive question "
+                            + question)
+                    else:
+                        self.majority_opt[question] = ""
+                        print("Unable to find associated majority option for isolation question "
+                            + question)
                 else:
-                    self.restrictive_questions[question] = csplit[1]
-                    self.question_types[question] = "R"
+                    if self.question_types[question] == "R":
+                        self.restrictive_questions[question] = csplit[1]
+                    else:
+                        self.majority_opt[question] = csplit[1]
 
     # Processes student response CSV
     def process_students(self):
@@ -114,13 +107,6 @@ class groupAssign:
         if self.name_question not in self.questions:
             raise ValueError("Provided name question {} not \
                             found in student CSV.".format(self.name_question))
-        if self.gen_flag and self.gen_question not in self.questions:
-            raise ValueError("Provided gender question {} not \
-                            found in student CSV.".format(self.gen_question))
-        if self.eth_flag and self.eth_question not in self.questions:
-            raise ValueError("Provided ethnicity question {} not \
-                            found in student CSV.".format(self.eth_question))
-
 
         #Creates an empty student object for each student
         self.students = [Student() for i in range(len(response_data))]
@@ -205,6 +191,8 @@ class groupAssign:
                     i+=1
                     j+=1
                     remainder -= 1
+                    if (j == len(self.class_state.groups)):
+                        j = 0
 
         for group in self.class_state.groups:
             group.score = self.score_group(group)
@@ -283,12 +271,19 @@ class groupAssign:
 
     # Adds remainder students to groups
     def strong_remainder(self, students):
+        n_groups = len(self.class_state.groups)
+        # Fixes edge case of small number of groups and large remainder
+        if n_groups < len(students):
+            init_per_group = self.per_group
+            while ((self.per_group-init_per_group)*n_groups < len(students)):
+                self.per_group += 1
+
         for student in students:
             max_improve = float('-inf')
             max_improve_group = None
             for group in self.class_state.groups:
                 # don't want to go more than one over
-                if len(group.students) <= self.per_group:
+                if len(group.students) < self.per_group:
                     init_score = group.score
                     group.students.append(student)
                     fin_score = self.score_group(group)
@@ -349,6 +344,9 @@ class groupAssign:
             elif self.question_types[question] == "R":
                 scores[question] = self.get_restrictive_penalty(group, question)
 
+            elif self.question_types[question] == "I":
+                scores[question] = self.get_isolation_penalty(group, question)
+
             # String response questions - no scoring necessary
             elif self.question_types[question] == "S":
                 scores[question] = 0
@@ -360,13 +358,6 @@ class groupAssign:
         score_sum = 0
         for key in scores.keys():
             score_sum += scores[key]
-
-        # Implements penalties for isolation. This improves diversity of
-        # groups, avoiding leaving one non-male student or one minority isolated in a group.
-        if self.gen_flag:
-            score_sum -= self.get_gender_penalty(group)
-        if self.eth_flag:
-            score_sum -= self.get_homogeneity_penalty(group)
 
         return score_sum
 
@@ -485,34 +476,17 @@ class groupAssign:
 
         return penalty
 
-    # implements penalties for one non-male student alone in a group
-    def get_gender_penalty(self, group):
-        gender_counter = 0
+    # Implements penalties for students isolated by non-majority status
+    def get_isolation_penalty(self, group, question):
+        iso_counter = 0
 
         for student in group.students:
-            if student.answers[self.gen_question] != self.male_opt:
-                gender_counter += 1
-
-        if gender_counter == 1:
-            return self.gender_penalty
-        elif self.per_group > 4 and gender_counter == 2:
-            return self.gender_penalty/3
-        else:
-            return 0
-
-    # Implements penalties for one non-white student alone in a group
-    def get_homogeneity_penalty(self, group):
-        eth_counter = 0
-
-        for student in group.students:
-            if student.answers[self.eth_question] != self.caucasian_opt:
-                eth_counter += 1
-
-
-        if eth_counter == 1:
-            return self.ethnicity_penalty
-        elif self.per_group > 4 and eth_counter == 2:
-            return self.ethnicity_penalty/3
+            if student.answers[question] != self.majority_opt[question]:
+                iso_counter += 1
+        if iso_counter == 1:
+            return -int(self.question_weights[question])
+        elif self.per_group > 4 and iso_counter == 2:
+            return -int(self.question_weights[question])/3
         else:
             return 0
 
@@ -750,12 +724,10 @@ class groupAssign:
 
 def main():
     random.seed(2)
-    student_csv = 'data/c6_s_25.csv'
-    weighting_csv = 'data/c6prof.csv'
+    student_csv = 'data/testvalidgen.csv'
+    weighting_csv = 'data/pnew.csv'
     assigner = groupAssign(student_csv, weighting_csv, per_group = 4, mode = 'Normal',
-            gen_pen = 0, gen_flag = True, eth_pen = 50, eth_flag = False,
-            name_q = 'What is your NETID?', gen_q = "What gender do you identify with?",
-            eth_q = "What is your ethnicity?", n_iter = 7500)
+            name_q = 'What is your NETID?', n_iter = 7500)
 
     assigner.assign_strong_groups()
     assigner.iterate_normal(visible=True)
