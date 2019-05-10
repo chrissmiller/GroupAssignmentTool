@@ -94,7 +94,12 @@ class groupAssign:
                             + question)
                 else:
                     if self.question_types[question] == "R":
-                        self.restrictive_questions[question] = csplit[1]
+                        if csplit[1] in self.questions:
+                            self.restrictive_questions[question] = csplit[1]
+                        else:
+                            print("Unable to find associated question for restrictive question \"" + question + "\"")
+                            print("Proceeding without this question.")
+                            self.questions.remove(question)
                     else:
                         self.majority_opt[question] = csplit[1]
 
@@ -258,12 +263,10 @@ class groupAssign:
 
         sum = 0
         for group in self.class_state.groups:
-            #print("Group " + str(group.number))
-            #print("\tScore " + str(group.score) + "\n")
             sum += group.score
+
         print("Average score: " + str(sum/len(self.class_state.groups)))
 
-        #print("(Computed in " + str(e - s) + " seconds)")
 
         self.initialized = True
 
@@ -304,7 +307,6 @@ class groupAssign:
         # If there are too many combos, randomly sample
         if (math.factorial(len(students))/(math.factorial(per_group)*
             math.factorial(len(students) - per_group)) > self.combinationlimit):
-            #potentials = random.sample(list(potentials), self.combinationlimit)
             potentials = itertools.islice(potentials, self.combinationlimit)
 
         return potentials
@@ -366,11 +368,7 @@ class groupAssign:
 
         # out of 12 blocks, maximum free (assuming all students take 3 classes)
         # is 8 since 9L and 9S overlap
-        # For demo purposes -
-        if self.demoMode:
-            max_scheduling = len(self.blocks)
-        else:
-            max_scheduling = len(self.blocks) - 4
+        max_scheduling = len(self.blocks) - 4
 
         #Lists all scheduling blocks
         scheduling_blocks = self.blocks.copy()
@@ -387,7 +385,6 @@ class groupAssign:
         #scheduling is now the remaining number of blocks that all members have free
         scheduling = len(scheduling_blocks)
         #Allows us to limit how much open time is needed (ie, 40 hours/week or 2)
-        #temporary - update so that it stops processing after max is reached
         if scheduling>max_scheduling:
             scheduling = max_scheduling
 
