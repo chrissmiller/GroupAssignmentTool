@@ -18,7 +18,7 @@ class groupAssign:
         self.weighting_csv = weighting_csv
         self.check_delimiter = ";" # delimiter for checkbox questions
         self.per_group = per_group
-        self.demoMode = False
+        self.rerun = False
 
         self.n_iter = n_iter
         self.initial_ep = 0.25
@@ -34,6 +34,9 @@ class groupAssign:
         # Warning - for large datasets, will still require long process time
         self.combinationlimit = 10000
 
+        if self.rerun: # reduce combination limit
+            self.combinationlimit = self.combinationlimit // 3
+
         self.question_weights = []
         self.question_types = []
 
@@ -42,10 +45,7 @@ class groupAssign:
 
         self.mode = mode
 
-        if self.demoMode:
-            self.blocks = ["block1;block2;block3"]
-        else:
-            self.blocks = ["9L", "9S", "10", "11", "12", "2", "10A", "2A", "3A", "3B", "6A", "6B"]
+        self.blocks = ["9L", "9S", "10", "11", "12", "2", "10A", "2A", "3A", "3B", "6A", "6B"]
 
         self.name_question = name_q
 
@@ -61,12 +61,14 @@ class groupAssign:
         self.process_students()
         self.process_prof()
 
-        if len(self.students) > 20:
+
+        if len(self.students) > 16:
             self.default_init_mode = "Strong" # "Random" or "Strong"
         else:
             self.default_init_mode = "Random" # "Random" or "Strong"
 
         self.initialized = False
+
 
 
 #===============================================================================
@@ -75,6 +77,10 @@ class groupAssign:
     # Processes professor data CSV
     def process_prof(self):
         prof_data = self.read_csv_data(self.weighting_csv)
+
+        if not self.questions:
+            self.questions = list(prof_data[0].keys())
+
         self.question_weights = (prof_data[0]).copy()
         self.question_types = (prof_data[1]).copy()
         for question in self.questions:
@@ -546,7 +552,7 @@ class groupAssign:
 #===============================================================================
 #=============================== Group Assignment ==============================
 #===============================================================================
-
+    # Repeatedly runs iterate_normal up to a time limit
     def anytime_run(self, timelimit=0, iterations=0):
         if iterations == 0:
             iterations = self.n_iter
@@ -628,9 +634,6 @@ class groupAssign:
         if visible:
             print("Final class score is: " + str(end_score))
         return end_score
-
-    def random_swap(self):
-        n_groups = len(self.class_state.groups)
 
     # Selects two random indices in the range 0 to max_num, inclusive
     def get_rand_index(self, max_num):
