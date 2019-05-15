@@ -490,7 +490,7 @@ class groupAssign:
                 iso_counter += 1
         if iso_counter == 1:
             return -int(self.question_weights[question])
-        elif self.per_group > 4 and iso_counter == 2:
+        elif len(group.students) > 4 and iso_counter == 2:
             return -int(self.question_weights[question])/3
         else:
             return 0
