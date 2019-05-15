@@ -263,7 +263,8 @@ class groupAssign:
             for student in max_group: # Clear assigned students
                 students.remove(student)
 
-        self.strong_remainder(students)
+        if remainder:
+            self.strong_remainder(students)
 
         e = time.time()
 
@@ -281,6 +282,7 @@ class groupAssign:
     # Adds remainder students to groups
     def strong_remainder(self, students):
         n_groups = len(self.class_state.groups)
+        self.per_group += 1
         # Fixes edge case of small number of groups and large remainder
         if n_groups < len(students):
             init_per_group = self.per_group
